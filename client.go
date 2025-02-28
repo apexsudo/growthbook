@@ -2,6 +2,7 @@ package growthbook
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/apexsudo/analytics"
@@ -9,25 +10,20 @@ import (
 	"github.com/tomarrell/wrapcheck/v2/wrapcheck/testdata/ignore_pkg_errors/src/github.com/pkg/errors"
 )
 
-type Attributes struct {
-	UserID *string
-}
-
 type Builder interface {
 	GetExperimentClient(attributes Attributes) ExperimentClient
-}
-type client struct {
-	client *growthbook.Client
 }
 
 type ExperimentClient interface {
 	EvalFeature(context context.Context, key string) *growthbook.FeatureResult
 }
 
+type client struct {
+	client *growthbook.Client
+}
+
 func (c *client) GetExperimentClient(attributes Attributes) ExperimentClient {
-	expClient, err := c.client.WithAttributes(growthbook.Attributes{
-		"id": *attributes.UserID,
-	})
+	expClient, err := c.client.WithAttributes(getAttributes(attributes))
 	if err != nil {
 		panic(errors.Wrap(err, "failed setting attributes, wrong config for experiment?"))
 	}
@@ -52,13 +48,22 @@ func New(clientKey string, analyticsClient analytics.Client) (Builder, error) {
 				extraData any,
 			) {
 				attrs, _ := extraData.(Attributes)
+				if attrs.UserID == nil {
+					slog.Error("experiment client is not configured properly for the user, userId was not set")
+
+					return
+				}
+				eventProperties := map[string]any{
+					"experimentId": experiment.Key,
+					"variationId":  result.VariationId,
+				}
+				eventProperties = populateFieldIfSet(eventProperties, "anonymousId", attrs.AnonymousID)
+				eventProperties = populateFieldIfSet(eventProperties, "email", attrs.Email)
+				eventProperties = populateFieldIfSet(eventProperties, "isInternal", attrs.IsInternal)
 				_ = analyticsClient.
 					Track(*attrs.UserID,
 						"Experiment Viewed",
-						map[string]any{
-							"experimentId": experiment.Key,
-							"variationId":  result.VariationId,
-						},
+						eventProperties,
 					)
 			}),
 	)
